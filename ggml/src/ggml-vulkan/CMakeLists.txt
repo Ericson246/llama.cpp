@@ -8,6 +8,10 @@ endif()
 
 find_package(Vulkan COMPONENTS glslc REQUIRED)
 
+if (NOT Vulkan_GLSLC_EXECUTABLE OR Vulkan_GLSLC_EXECUTABLE STREQUAL "Vulkan_GLSLC_EXECUTABLE-NOTFOUND")
+    set(Vulkan_GLSLC_EXECUTABLE "C:/Users/ericg/AppData/Local/Android/Sdk/ndk/28.2.13676358/shader-tools/windows-x86_64/glslc.exe")
+endif()
+
 if (CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
     # Parallel build object files
     add_definitions(/MP)
@@ -146,29 +150,40 @@ if (Vulkan_FOUND)
         message(STATUS "vulkan-shaders-gen toolchain file: ${HOST_CMAKE_TOOLCHAIN_FILE}")
     endif()
 
+    set(VSG_CMAKE_ARGS
+        "-DCMAKE_INSTALL_PREFIX=${CMAKE_BINARY_DIR}/$<CONFIG>"
+        "-DCMAKE_INSTALL_BINDIR=."
+        "-DCMAKE_BUILD_TYPE=$<CONFIG>"
+        "-DCMAKE_MAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}"
+        "-G${CMAKE_GENERATOR}"
+        ${VULKAN_SHADER_GEN_CMAKE_ARGS}
+    )
+
+    set(VC_VARS_PATH "C:/Program Files (x86)/Microsoft Visual Studio/18/BuildTools/VC/Auxiliary/Build/vcvars64.bat")
+    if (CMAKE_HOST_SYSTEM_NAME STREQUAL "Windows" AND EXISTS "${VC_VARS_PATH}")
+        file(TO_NATIVE_PATH "${VC_VARS_PATH}" VC_VARS_PATH_NATIVE)
+        set(WRAPPER_SCRIPT "${CMAKE_CURRENT_BINARY_DIR}/vsg_env_wrapper.bat")
+        file(WRITE "${WRAPPER_SCRIPT}" "@echo off\ncall \"${VC_VARS_PATH_NATIVE}\" >nul\n%*")
+        message(STATUS "Created VS environment wrapper at: ${WRAPPER_SCRIPT}")
+        set(VSG_WRAPPER "${WRAPPER_SCRIPT}")
+    else()
+        set(VSG_WRAPPER "")
+    endif()
+
     ExternalProject_Add(
         vulkan-shaders-gen
         SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/vulkan-shaders
-        CMAKE_ARGS -DCMAKE_INSTALL_PREFIX=${CMAKE_BINARY_DIR}/$<CONFIG>
-                   -DCMAKE_INSTALL_BINDIR=.
-                   -DCMAKE_BUILD_TYPE=$<CONFIG>
-                   ${VULKAN_SHADER_GEN_CMAKE_ARGS}
-
-        BUILD_COMMAND ${CMAKE_COMMAND} --build . --config $<CONFIG>
-        BUILD_ALWAYS  TRUE
-
-        # NOTE: When DESTDIR is set using Makefile generators and
-        # "make install" triggers the build step, vulkan-shaders-gen
-        # would be installed into the DESTDIR prefix, so it is unset
-        # to ensure that does not happen.
-
-        INSTALL_COMMAND ${CMAKE_COMMAND} -E env --unset=DESTDIR
-                        ${CMAKE_COMMAND} --install . --config $<CONFIG>
+        CMAKE_ARGS ${VSG_CMAKE_ARGS}
+        CONFIGURE_COMMAND ${VSG_WRAPPER} ${CMAKE_COMMAND} ${VSG_CMAKE_ARGS} ${CMAKE_CURRENT_SOURCE_DIR}/vulkan-shaders
+        BUILD_COMMAND ${VSG_WRAPPER} ${CMAKE_COMMAND} --build . --config $<CONFIG>
+        INSTALL_COMMAND ${VSG_WRAPPER} ${CMAKE_COMMAND} -E env --unset=DESTDIR ${CMAKE_COMMAND} --install . --config $<CONFIG>
+        BUILD_ALWAYS TRUE
     )
 
-    set (_ggml_vk_host_suffix $<IF:$<STREQUAL:${CMAKE_HOST_SYSTEM_NAME},Windows>,.exe,>)
-    set (_ggml_vk_genshaders_dir "${CMAKE_BINARY_DIR}/$<CONFIG>")
-    set (_ggml_vk_genshaders_cmd "${_ggml_vk_genshaders_dir}/vulkan-shaders-gen${_ggml_vk_host_suffix}")
+    # set (_ggml_vk_host_suffix $<IF:$<STREQUAL:${CMAKE_HOST_SYSTEM_NAME},Windows>,.exe,>)
+    # set (_ggml_vk_genshaders_dir "${CMAKE_BINARY_DIR}/$<CONFIG>")
+    # set (_ggml_vk_genshaders_cmd "${_ggml_vk_genshaders_dir}/vulkan-shaders-gen${_ggml_vk_host_suffix}")
+    set (_ggml_vk_genshaders_cmd "${CMAKE_BINARY_DIR}/debug/vulkan-shaders-gen.exe")
     set (_ggml_vk_header     "${CMAKE_CURRENT_BINARY_DIR}/ggml-vulkan-shaders.hpp")
     set (_ggml_vk_input_dir  "${CMAKE_CURRENT_SOURCE_DIR}/vulkan-shaders")
     set (_ggml_vk_output_dir "${CMAKE_CURRENT_BINARY_DIR}/vulkan-shaders.spv")
