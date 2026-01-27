@@ -8,10 +8,6 @@ endif()
 
 find_package(Vulkan COMPONENTS glslc REQUIRED)
 
-if (NOT Vulkan_GLSLC_EXECUTABLE OR Vulkan_GLSLC_EXECUTABLE STREQUAL "Vulkan_GLSLC_EXECUTABLE-NOTFOUND")
-    set(Vulkan_GLSLC_EXECUTABLE "C:/Users/ericg/AppData/Local/Android/Sdk/ndk/28.2.13676358/shader-tools/windows-x86_64/glslc.exe")
-endif()
-
 if (CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
     # Parallel build object files
     add_definitions(/MP)
@@ -159,8 +155,24 @@ if (Vulkan_FOUND)
         ${VULKAN_SHADER_GEN_CMAKE_ARGS}
     )
 
-    set(VC_VARS_PATH "C:/Program Files (x86)/Microsoft Visual Studio/18/BuildTools/VC/Auxiliary/Build/vcvars64.bat")
-    if (CMAKE_HOST_SYSTEM_NAME STREQUAL "Windows" AND EXISTS "${VC_VARS_PATH}")
+    # Search for vcvars64.bat in common locations
+    if (WIN32 AND NOT VC_VARS_PATH)
+        set(VC_VARS_LOCATIONS
+            "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Auxiliary/Build/vcvars64.bat"
+            "C:/Program Files (x86)/Microsoft Visual Studio/2019/Community/VC/Auxiliary/Build/vcvars64.bat"
+            "C:/Program Files (x86)/Microsoft Visual Studio/18/BuildTools/VC/Auxiliary/Build/vcvars64.bat"
+            "C:/Program Files/Microsoft Visual Studio/2022/Enterprise/VC/Auxiliary/Build/vcvars64.bat"
+            "C:/Program Files/Microsoft Visual Studio/2022/Professional/VC/Auxiliary/Build/vcvars64.bat"
+        )
+        foreach(LOC ${VC_VARS_LOCATIONS})
+            if(EXISTS "${LOC}")
+                set(VC_VARS_PATH "${LOC}")
+                break()
+            endif()
+        endforeach()
+    endif()
+
+    if (CMAKE_HOST_SYSTEM_NAME STREQUAL "Windows" AND VC_VARS_PATH AND EXISTS "${VC_VARS_PATH}")
         file(TO_NATIVE_PATH "${VC_VARS_PATH}" VC_VARS_PATH_NATIVE)
         set(WRAPPER_SCRIPT "${CMAKE_CURRENT_BINARY_DIR}/vsg_env_wrapper.bat")
         file(WRITE "${WRAPPER_SCRIPT}" "@echo off\ncall \"${VC_VARS_PATH_NATIVE}\" >nul\n%*")
@@ -180,10 +192,8 @@ if (Vulkan_FOUND)
         BUILD_ALWAYS TRUE
     )
 
-    # set (_ggml_vk_host_suffix $<IF:$<STREQUAL:${CMAKE_HOST_SYSTEM_NAME},Windows>,.exe,>)
-    # set (_ggml_vk_genshaders_dir "${CMAKE_BINARY_DIR}/$<CONFIG>")
-    # set (_ggml_vk_genshaders_cmd "${_ggml_vk_genshaders_dir}/vulkan-shaders-gen${_ggml_vk_host_suffix}")
-    set (_ggml_vk_genshaders_cmd "${CMAKE_BINARY_DIR}/$<CONFIG>/vulkan-shaders-gen.exe")
+    set (_ggml_vk_host_suffix $<IF:$<STREQUAL:${CMAKE_HOST_SYSTEM_NAME},Windows>,.exe,>)
+    set (_ggml_vk_genshaders_cmd "${CMAKE_BINARY_DIR}/$<CONFIG>/vulkan-shaders-gen${_ggml_vk_host_suffix}")
     set (_ggml_vk_header     "${CMAKE_CURRENT_BINARY_DIR}/ggml-vulkan-shaders.hpp")
     set (_ggml_vk_input_dir  "${CMAKE_CURRENT_SOURCE_DIR}/vulkan-shaders")
     set (_ggml_vk_output_dir "${CMAKE_CURRENT_BINARY_DIR}/vulkan-shaders.spv")
