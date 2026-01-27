@@ -8,6 +8,21 @@ endif()
 
 find_package(Vulkan COMPONENTS glslc REQUIRED)
 
+if (NOT Vulkan_GLSLC_EXECUTABLE OR Vulkan_GLSLC_EXECUTABLE MATCHES "NOTFOUND")
+    message(STATUS "Vulkan_GLSLC_EXECUTABLE not found, searching in NDK: ${ANDROID_NDK}")
+    find_program(Vulkan_GLSLC_EXECUTABLE
+        NAMES glslc glslc.exe
+        PATHS "${ANDROID_NDK}/shader-tools/windows-x86_64"
+              "${ANDROID_NDK}/shader-tools/linux-x86_64"
+              "${ANDROID_NDK}/shader-tools/darwin-x86_64"
+        NO_DEFAULT_PATH
+    )
+    if (Vulkan_GLSLC_EXECUTABLE)
+        message(STATUS "Found glslc in NDK: ${Vulkan_GLSLC_EXECUTABLE}")
+        set(Vulkan_GLSLC_EXECUTABLE "${Vulkan_GLSLC_EXECUTABLE}" CACHE FILEPATH "Path to glslc" FORCE)
+    endif()
+endif()
+
 if (CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
     # Parallel build object files
     add_definitions(/MP)
@@ -15,14 +30,75 @@ endif()
 
 function(detect_host_compiler)
     if (CMAKE_HOST_SYSTEM_NAME STREQUAL "Windows")
-        find_program(HOST_C_COMPILER NAMES cl gcc clang NO_CMAKE_FIND_ROOT_PATH)
-        find_program(HOST_CXX_COMPILER NAMES cl g++ clang++ NO_CMAKE_FIND_ROOT_PATH)
+        # Clear cache variables to ensure fresh search for absolute paths
+        unset(HOST_C_COMPILER CACHE)
+        unset(HOST_CXX_COMPILER CACHE)
+        
+        # 0. If we found vcvars64.bat, we can assume MSVC (cl.exe) is available
+        # and will be accessible via our environment wrapper script.
+        if (VC_VARS_PATH)
+            message(STATUS "Using MSVC via environment wrapper (VC_VARS_PATH=${VC_VARS_PATH})")
+            set(HOST_C_COMPILER "cl.exe" PARENT_SCOPE)
+            set(HOST_CXX_COMPILER "cl.exe" PARENT_SCOPE)
+            return()
+        endif()
+
+        # 1. Try to find a compiler that is NOT in the Android/NDK paths
+        # We prefer gcc (MinGW) or clang (LLVM) as they usually don't require environment injection like cl.exe
+        # but we must avoid the NDK's clang which is for cross-compiling.
+        find_program(HOST_C_COMPILER 
+            NAMES gcc.exe clang.exe cl.exe
+            HINTS "C:/msys64/mingw64/bin" "C:/Program Files/LLVM/bin" "C:/Strawberry/c/bin"
+            NO_CMAKE_FIND_ROOT_PATH
+        )
+        
+        # 2. If the found compiler is in the NDK, it's likely incorrect for host tools
+        if (HOST_C_COMPILER MATCHES ".*[Aa]ndroid.*" OR HOST_C_COMPILER MATCHES ".*[Nn][Dd][Kk].*")
+            set(NDK_COMPILER "${HOST_C_COMPILER}")
+            unset(HOST_C_COMPILER CACHE)
+            # Try to find again, but excluding NDK paths this time
+            # We can't easily exclude paths in find_program, but we can look in common system paths first
+            find_program(HOST_C_COMPILER 
+                NAMES gcc.exe cl.exe clang.exe 
+                PATHS "C:/Windows/System32" "C:/msys64/mingw64/bin" "C:/Program Files/LLVM/bin"
+                NO_DEFAULT_PATH
+            )
+            if (NOT HOST_C_COMPILER)
+                # Fallback to standard find but if it's still NDK, we might be in trouble
+                find_program(HOST_C_COMPILER NAMES cl.exe NO_CMAKE_FIND_ROOT_PATH)
+            endif()
+        endif()
+
+        # Repeat for CXX
+        find_program(HOST_CXX_COMPILER 
+            NAMES g++.exe clang++.exe cl.exe
+            HINTS "C:/msys64/mingw64/bin" "C:/Program Files/LLVM/bin" "C:/Strawberry/c/bin"
+            NO_CMAKE_FIND_ROOT_PATH
+        )
+        if (HOST_CXX_COMPILER MATCHES ".*[Aa]ndroid.*" OR HOST_CXX_COMPILER MATCHES ".*[Nn][Dd][Kk].*")
+            unset(HOST_CXX_COMPILER CACHE)
+            find_program(HOST_CXX_COMPILER 
+                NAMES g++.exe cl.exe clang++.exe 
+                PATHS "C:/Windows/System32" "C:/msys64/mingw64/bin" "C:/Program Files/LLVM/bin"
+                NO_DEFAULT_PATH
+            )
+            if (NOT HOST_CXX_COMPILER)
+                find_program(HOST_CXX_COMPILER NAMES cl.exe NO_CMAKE_FIND_ROOT_PATH)
+            endif()
+        endif()
     else()
         find_program(HOST_C_COMPILER NAMES gcc clang NO_CMAKE_FIND_ROOT_PATH)
         find_program(HOST_CXX_COMPILER NAMES g++ clang++ NO_CMAKE_FIND_ROOT_PATH)
     endif()
+
+    if (NOT HOST_C_COMPILER OR NOT HOST_CXX_COMPILER)
+        message(WARNING "Host compiler not found or is pointing to NDK. Shader generation might fail.")
+    endif()
+
     set(HOST_C_COMPILER "${HOST_C_COMPILER}" PARENT_SCOPE)
     set(HOST_CXX_COMPILER "${HOST_CXX_COMPILER}" PARENT_SCOPE)
+    message(STATUS "Detected host C compiler: ${HOST_C_COMPILER}")
+    message(STATUS "Detected host CXX compiler: ${HOST_CXX_COMPILER}")
 endfunction()
 
 # Function to test shader extension support
@@ -125,9 +201,75 @@ if (Vulkan_FOUND)
         if (GGML_VULKAN_SHADERS_GEN_TOOLCHAIN)
             set(HOST_CMAKE_TOOLCHAIN_FILE ${GGML_VULKAN_SHADERS_GEN_TOOLCHAIN})
         else()
+            # Search for vcvars64.bat in common locations first to inform compiler detection
+            if (WIN32 AND NOT VC_VARS_PATH)
+                message(WARNING "DEBUG: Searching for Visual Studio host compiler environment...")
+                
+                # 1. Try using where.exe to see if cl.exe is ALREADY in the path
+                execute_process(COMMAND where cl.exe OUTPUT_VARIABLE WHERE_CL OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+                if (WHERE_CL)
+                    message(WARNING "DEBUG: Found cl.exe in PATH: ${WHERE_CL}")
+                    set(HOST_C_COMPILER "cl.exe" CACHE INTERNAL "")
+                    set(HOST_CXX_COMPILER "cl.exe" CACHE INTERNAL "")
+                endif()
+
+                # 2. Try using vswhere.exe
+                if (NOT HOST_C_COMPILER)
+                    set(VSWHERES "C:/Program Files (x86)/Microsoft Visual Studio/Installer/vswhere.exe" "$ENV{ProgramFiles\(x86\)}/Microsoft Visual Studio/Installer/vswhere.exe")
+                    foreach(V ${VSWHERES})
+                        if (EXISTS "${V}")
+                            message(WARNING "DEBUG: Found vswhere at: ${V}")
+                            execute_process(COMMAND "${V}" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+                                            OUTPUT_VARIABLE VS_INSTALL_PATH
+                                            OUTPUT_STRIP_TRAILING_WHITESPACE)
+                            if (VS_INSTALL_PATH)
+                                message(WARNING "DEBUG: vswhere reported installation path: ${VS_INSTALL_PATH}")
+                                set(POTENTIAL_VARS "${VS_INSTALL_PATH}/VC/Auxiliary/Build/vcvars64.bat")
+                                if (EXISTS "${POTENTIAL_VARS}")
+                                    message(WARNING "DEBUG: Confirmed vcvars64.bat exists at: ${POTENTIAL_VARS}")
+                                    set(VC_VARS_PATH "${POTENTIAL_VARS}" CACHE INTERNAL "Path to vcvars64.bat")
+                                    break()
+                                endif()
+                            endif()
+                        endif()
+                    endforeach()
+                endif()
+
+                # 3. Last resort: Hardcoded common paths
+                if (NOT HOST_C_COMPILER AND NOT VC_VARS_PATH)
+                    set(VC_VARS_LOCATIONS
+                        "C:/Program Files (x86)/Microsoft Visual Studio/2019/BuildTools/VC/Auxiliary/Build/vcvars64.bat"
+                        "C:/Program Files (x86)/Microsoft Visual Studio/2017/BuildTools/VC/Auxiliary/Build/vcvars64.bat"
+                        "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Auxiliary/Build/vcvars64.bat"
+                        "C:/Program Files (x86)/Microsoft Visual Studio/2019/Community/VC/Auxiliary/Build/vcvars64.bat"
+                        "C:/Program Files/Microsoft Visual Studio/2022/BuildTools/VC/Auxiliary/Build/vcvars64.bat"
+                    )
+                    foreach(LOC ${VC_VARS_LOCATIONS})
+                        if(EXISTS "${LOC}")
+                            message(WARNING "DEBUG: Found hardcoded VS environment script at: ${LOC}")
+                            set(VC_VARS_PATH "${LOC}" CACHE INTERNAL "Path to vcvars64.bat")
+                            break()
+                        endif()
+                    endforeach()
+                endif()
+
+                if (NOT HOST_C_COMPILER AND NOT VC_VARS_PATH)
+                    # Try one more time with backslashes just in case
+                    set(LOC_BS "C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\BuildTools\\VC\\Auxiliary\\Build\\vcvars64.bat")
+                    if (EXISTS "${LOC_BS}")
+                        message(WARNING "DEBUG: Found VS environment script using backslashes: ${LOC_BS}")
+                        set(VC_VARS_PATH "${LOC_BS}" CACHE INTERNAL "Path to vcvars64.bat")
+                    endif()
+                endif()
+
+                if (NOT HOST_C_COMPILER AND NOT VC_VARS_PATH)
+                    message(WARNING "DEBUG: Could not find Visual Studio environment. Host tools might fail to build.")
+                endif()
+            endif()
+
             detect_host_compiler()
             if (NOT HOST_C_COMPILER OR NOT HOST_CXX_COMPILER)
-                message(FATAL_ERROR "Host compiler not found")
+                message(FATAL_ERROR "Host compiler not found. Please ensure a host C/C++ compiler (gcc, clang, or MSVC) is in your PATH or Visual Studio is installed.")
             else()
                 message(STATUS "Host compiler: ${HOST_C_COMPILER} ${HOST_CXX_COMPILER}")
             endif()
@@ -155,29 +297,13 @@ if (Vulkan_FOUND)
         ${VULKAN_SHADER_GEN_CMAKE_ARGS}
     )
 
-    # Search for vcvars64.bat in common locations
-    if (WIN32 AND NOT VC_VARS_PATH)
-        set(VC_VARS_LOCATIONS
-            "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Auxiliary/Build/vcvars64.bat"
-            "C:/Program Files (x86)/Microsoft Visual Studio/2019/Community/VC/Auxiliary/Build/vcvars64.bat"
-            "C:/Program Files (x86)/Microsoft Visual Studio/18/BuildTools/VC/Auxiliary/Build/vcvars64.bat"
-            "C:/Program Files/Microsoft Visual Studio/2022/Enterprise/VC/Auxiliary/Build/vcvars64.bat"
-            "C:/Program Files/Microsoft Visual Studio/2022/Professional/VC/Auxiliary/Build/vcvars64.bat"
-        )
-        foreach(LOC ${VC_VARS_LOCATIONS})
-            if(EXISTS "${LOC}")
-                set(VC_VARS_PATH "${LOC}")
-                break()
-            endif()
-        endforeach()
-    endif()
-
+    # Use the discovered VC_VARS_PATH to create a wrapper
     if (CMAKE_HOST_SYSTEM_NAME STREQUAL "Windows" AND VC_VARS_PATH AND EXISTS "${VC_VARS_PATH}")
         file(TO_NATIVE_PATH "${VC_VARS_PATH}" VC_VARS_PATH_NATIVE)
         set(WRAPPER_SCRIPT "${CMAKE_CURRENT_BINARY_DIR}/vsg_env_wrapper.bat")
-        file(WRITE "${WRAPPER_SCRIPT}" "@echo off\ncall \"${VC_VARS_PATH_NATIVE}\" >nul\n%*")
+        file(WRITE "${WRAPPER_SCRIPT}" "@echo off\r\ncall \"${VC_VARS_PATH_NATIVE}\" >nul\r\n%*\r\n")
         message(STATUS "Created VS environment wrapper at: ${WRAPPER_SCRIPT}")
-        set(VSG_WRAPPER "${WRAPPER_SCRIPT}")
+        set(VSG_WRAPPER cmd /c "${WRAPPER_SCRIPT}")
     else()
         set(VSG_WRAPPER "")
     endif()
@@ -210,7 +336,7 @@ if (Vulkan_FOUND)
 
     add_custom_command(
         OUTPUT ${_ggml_vk_header}
-        COMMAND ${_ggml_vk_genshaders_cmd}
+        COMMAND ${VSG_WRAPPER} "${_ggml_vk_genshaders_cmd}"
             --output-dir ${_ggml_vk_output_dir}
             --target-hpp ${_ggml_vk_header}
         DEPENDS ${_ggml_vk_shaders_gen_sources}
@@ -226,7 +352,7 @@ if (Vulkan_FOUND)
         add_custom_command(
             OUTPUT  ${_ggml_vk_target_cpp}
             DEPFILE ${_ggml_vk_target_cpp}.d
-            COMMAND ${_ggml_vk_genshaders_cmd}
+            COMMAND ${VSG_WRAPPER} "${_ggml_vk_genshaders_cmd}"
                 --glslc      ${Vulkan_GLSLC_EXECUTABLE}
                 --source     ${file_full}
                 --output-dir ${_ggml_vk_output_dir}
