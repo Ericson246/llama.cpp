@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.14) # for add_link_options and implicit target directories.
+cmake_minimum_required(VERSION 3.20) # for add_link_options and implicit target directories.
 project("llama.cpp" C CXX)
 include(CheckIncludeFileCXX)
 
@@ -70,6 +70,8 @@ if (MSVC)
     add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:/utf-8>")
     add_compile_options("$<$<COMPILE_LANGUAGE:C>:/bigobj>")
     add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:/bigobj>")
+    add_compile_options("$<$<COMPILE_LANGUAGE:C>:/wd4244;/wd4267;/wd4018;/wd4101;/wd4305>")
+    add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:/wd4244;/wd4267;/wd4018;/wd4101;/wd4305>")
 endif()
 
 if (LLAMA_STANDALONE)
