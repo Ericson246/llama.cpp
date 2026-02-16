@@ -1987,6 +1987,7 @@ void vk_memory_logger::log_deallocation(vk_buffer_ref buf_ref) {
 
 struct vk_instance_t {
     vk::Instance instance;
+    PFN_vkGetInstanceProcAddr pfn_vkGetInstanceProcAddr = {};
 
     bool debug_utils_support = false;  // VK_EXT_debug_utils enabled
     PFN_vkSetDebugUtilsObjectNameEXT pfn_vkSetDebugUtilsObjectNameEXT = {};
@@ -2002,7 +2003,14 @@ struct vk_instance_t {
 };
 
 static bool vk_instance_initialized = false;
+static bool ggml_vk_disabled = false;
 static vk_instance_t vk_instance;
+
+extern "C" {
+    void ggml_vk_set_disabled(bool disabled) {
+        ggml_vk_disabled = disabled;
+    }
+}
 
 #ifdef GGML_VULKAN_CHECK_RESULTS
 static size_t vk_skip_checks;
@@ -4927,7 +4935,11 @@ static vk_device ggml_vk_get_device(size_t idx) {
         }
 #endif
 
-        vkGetPhysicalDeviceFeatures2(device->physical_device, &device_features2);
+        if (VULKAN_HPP_DEFAULT_DISPATCHER.vkGetPhysicalDeviceFeatures2) {
+            VULKAN_HPP_DEFAULT_DISPATCHER.vkGetPhysicalDeviceFeatures2(device->physical_device, &device_features2);
+        } else {
+            VULKAN_HPP_DEFAULT_DISPATCHER.vkGetPhysicalDeviceFeatures(device->physical_device, &device_features2.features);
+        }
 
         device->pipeline_executable_properties_support = pipeline_executable_properties_support;
 
@@ -5067,7 +5079,7 @@ static vk_device ggml_vk_get_device(size_t idx) {
             std::vector<VkCooperativeMatrixPropertiesKHR> cm_props;
 
             PFN_vkGetPhysicalDeviceCooperativeMatrixPropertiesKHR pfn_vkGetPhysicalDeviceCooperativeMatrixPropertiesKHR =
-                (PFN_vkGetPhysicalDeviceCooperativeMatrixPropertiesKHR)vkGetInstanceProcAddr(vk_instance.instance, "vkGetPhysicalDeviceCooperativeMatrixPropertiesKHR");
+                (PFN_vkGetPhysicalDeviceCooperativeMatrixPropertiesKHR)vk_instance.pfn_vkGetInstanceProcAddr(vk_instance.instance, "vkGetPhysicalDeviceCooperativeMatrixPropertiesKHR");
 
             uint32_t cm_props_num;
 
@@ -5413,11 +5425,10 @@ static void ggml_vk_print_gpu_info(size_t idx) {
     }
 #endif
 
-    if (vkGetPhysicalDeviceFeatures2) {
-        vkGetPhysicalDeviceFeatures2(physical_device, &device_features2);
+    if (VULKAN_HPP_DEFAULT_DISPATCHER.vkGetPhysicalDeviceFeatures2) {
+        VULKAN_HPP_DEFAULT_DISPATCHER.vkGetPhysicalDeviceFeatures2(physical_device, &device_features2);
     } else {
-        // Log or handle the absence of vkGetPhysicalDeviceFeatures2
-        // Use default or safe features
+        VULKAN_HPP_DEFAULT_DISPATCHER.vkGetPhysicalDeviceFeatures(physical_device, &device_features2.features);
     }
 
     fp16 = fp16 && vk12_features.shaderFloat16;
@@ -5459,82 +5470,94 @@ static bool ggml_vk_instance_portability_enumeration_ext_available(const std::ve
 static bool ggml_vk_instance_debug_utils_ext_available(const std::vector<vk::ExtensionProperties> & instance_extensions);
 static bool ggml_vk_device_is_supported(const vk::PhysicalDevice & vkdev);
 
+#if defined(__ANDROID__)
+#include <dlfcn.h>
+#endif
+
 static DispatchLoaderDynamic ggml_vk_default_dispatcher_instance;
 DispatchLoaderDynamic & ggml_vk_default_dispatcher() {
     return ggml_vk_default_dispatcher_instance;
 }
 
+// Global storage for the dispatcher
+#include <vulkan/vulkan.hpp>
+
 static void ggml_vk_instance_init() {
-    if (vk_instance_initialized) {
+    if (vk_instance_initialized || ggml_vk_disabled) {
         return;
     }
-    VK_LOG_DEBUG("ggml_vk_instance_init()");
+    
+    PFN_vkGetInstanceProcAddr get_instance_proc_addr = nullptr;
 
-    // See https://github.com/KhronosGroup/Vulkan-Hpp?tab=readme-ov-file#extensions--per-device-function-pointers-
-    ggml_vk_default_dispatcher_instance.init(vkGetInstanceProcAddr);
+#if defined(__ANDROID__)
+    void* handle = dlopen("libvulkan.so", RTLD_NOW);
+    if (!handle) {
+        GGML_LOG_ERROR("ggml_vulkan: Could not load libvulkan.so\n");
+        return;
+    }
+    get_instance_proc_addr = reinterpret_cast<PFN_vkGetInstanceProcAddr>(dlsym(handle, "vkGetInstanceProcAddr"));
+#else
+    get_instance_proc_addr = vkGetInstanceProcAddr;
+#endif
 
-    uint32_t api_version = vk::enumerateInstanceVersion();
+    if (!get_instance_proc_addr) {
+        GGML_LOG_ERROR("ggml_vulkan: Could not find vkGetInstanceProcAddr\n");
+        return;
+    }
 
-    if (api_version < VK_API_VERSION_1_2) {
-        std::cerr << "ggml_vulkan: Error: Vulkan 1.2 required." << std::endl;
-        throw vk::SystemError(vk::Result::eErrorFeatureNotPresent, "Vulkan 1.2 required");
+    vk_instance.pfn_vkGetInstanceProcAddr = get_instance_proc_addr;
+    ggml_vk_default_dispatcher_instance.init(get_instance_proc_addr);
+
+    uint32_t api_version = VK_API_VERSION_1_0;
+    if (ggml_vk_default_dispatcher_instance.vkEnumerateInstanceVersion) {
+        ggml_vk_default_dispatcher_instance.vkEnumerateInstanceVersion(&api_version);
+    }
+
+    if (api_version < VK_API_VERSION_1_0) {
+        GGML_LOG_ERROR("ggml_vulkan: Vulkan not supported.\n");
+        return;
     }
 
     vk::ApplicationInfo app_info{ "ggml-vulkan", 1, nullptr, 0, api_version };
 
-    const std::vector<vk::ExtensionProperties> instance_extensions = vk::enumerateInstanceExtensionProperties();
-    const bool layer_settings = ggml_vk_instance_layer_settings_available();
+    try {
+        if (!ggml_vk_default_dispatcher_instance.vkEnumerateInstanceExtensionProperties || 
+            !ggml_vk_default_dispatcher_instance.vkCreateInstance) {
+            GGML_LOG_ERROR("ggml_vulkan: Critical Vulkan functions missing from dispatcher.\n");
+            return;
+        }
+        
+        const std::vector<vk::ExtensionProperties> instance_extensions = vk::enumerateInstanceExtensionProperties(nullptr, ggml_vk_default_dispatcher_instance);
+
+        const bool layer_settings = ggml_vk_instance_layer_settings_available();
+
 #ifdef __APPLE__
     const bool portability_enumeration_ext = ggml_vk_instance_portability_enumeration_ext_available(instance_extensions);
 #endif
-    const bool debug_utils_ext = ggml_vk_instance_debug_utils_ext_available(instance_extensions) && getenv("GGML_VK_DEBUG_MARKERS") != nullptr;
+    const bool debug_utils_ext = false; // Simplified for compatibility
     std::vector<const char*> layers;
-
-    if (layer_settings) {
-        layers.push_back("VK_LAYER_KHRONOS_validation");
-    }
     std::vector<const char*> extensions;
-    if (layer_settings) {
-        extensions.push_back("VK_EXT_layer_settings");
-    }
+
 #ifdef __APPLE__
+    const bool portability_enumeration_ext = ggml_vk_instance_portability_enumeration_ext_available(instance_extensions);
     if (portability_enumeration_ext) {
         extensions.push_back("VK_KHR_portability_enumeration");
     }
 #endif
-    if (debug_utils_ext) {
-        extensions.push_back("VK_EXT_debug_utils");
-    }
-    VkBool32 enable_best_practice = layer_settings;
-    std::vector<vk::LayerSettingEXT> settings = {
-        {
-            "VK_LAYER_KHRONOS_validation",
-            "validate_best_practices",
-            vk::LayerSettingTypeEXT::eBool32,
-            1,
-            &enable_best_practice
-        },
-    };
-    vk::LayerSettingsCreateInfoEXT layer_setting_info(settings);
-    vk::InstanceCreateInfo instance_create_info(vk::InstanceCreateFlags{}, &app_info, layers, extensions, &layer_setting_info);
+
+    vk::InstanceCreateInfo instance_create_info(vk::InstanceCreateFlags{}, &app_info, layers, extensions);
 #ifdef __APPLE__
     if (portability_enumeration_ext) {
         instance_create_info.flags |= vk::InstanceCreateFlagBits::eEnumeratePortabilityKHR;
     }
 #endif
 
-    vk_instance.instance = vk::createInstance(instance_create_info);
+    // Use dispatcher for createInstance
+    vk_instance.instance = vk::createInstance(instance_create_info, nullptr, ggml_vk_default_dispatcher_instance);
     vk_instance_initialized = true;
 
-    if (debug_utils_ext) {
-        vk_instance.debug_utils_support              = true;
-        vk_instance.pfn_vkSetDebugUtilsObjectNameEXT = (PFN_vkSetDebugUtilsObjectNameEXT) vkGetInstanceProcAddr(vk_instance.instance, "vkSetDebugUtilsObjectNameEXT");
-        vk_instance.pfn_vkQueueBeginDebugUtilsLabelEXT = (PFN_vkQueueBeginDebugUtilsLabelEXT) vkGetInstanceProcAddr(vk_instance.instance, "vkQueueBeginDebugUtilsLabelEXT");
-        vk_instance.pfn_vkQueueEndDebugUtilsLabelEXT = (PFN_vkQueueEndDebugUtilsLabelEXT) vkGetInstanceProcAddr(vk_instance.instance, "vkQueueEndDebugUtilsLabelEXT");
-        vk_instance.pfn_vkCmdBeginDebugUtilsLabelEXT = (PFN_vkCmdBeginDebugUtilsLabelEXT) vkGetInstanceProcAddr(vk_instance.instance, "vkCmdBeginDebugUtilsLabelEXT");
-        vk_instance.pfn_vkCmdEndDebugUtilsLabelEXT =   (PFN_vkCmdEndDebugUtilsLabelEXT) vkGetInstanceProcAddr(vk_instance.instance, "vkCmdEndDebugUtilsLabelEXT");
-        vk_instance.pfn_vkCmdInsertDebugUtilsLabelEXT = (PFN_vkCmdInsertDebugUtilsLabelEXT) vkGetInstanceProcAddr(vk_instance.instance, "vkCmdInsertDebugUtilsLabelEXT");
-    }
+    // Re-init dispatcher with the new instance
+    ggml_vk_default_dispatcher_instance.init(vk_instance.instance, get_instance_proc_addr);
 
     vk_perf_logger_enabled = getenv("GGML_VK_PERF_LOGGER") != nullptr;
     vk_perf_logger_concurrent = getenv("GGML_VK_PERF_LOGGER_CONCURRENT") != nullptr;
@@ -5546,10 +5569,7 @@ static void ggml_vk_instance_init() {
         vk_perf_logger_frequency = std::stoul(GGML_VK_PERF_LOGGER_FREQUENCY);
     }
 
-    // See https://github.com/KhronosGroup/Vulkan-Hpp?tab=readme-ov-file#extensions--per-device-function-pointers-
-    VULKAN_HPP_DEFAULT_DISPATCHER.init(vk_instance.instance);
-
-    std::vector<vk::PhysicalDevice> devices = vk_instance.instance.enumeratePhysicalDevices();
+    std::vector<vk::PhysicalDevice> devices = vk_instance.instance.enumeratePhysicalDevices(ggml_vk_default_dispatcher_instance);
 
     // Emulate behavior of CUDA_VISIBLE_DEVICES for Vulkan
     char * devices_env = getenv("GGML_VK_VISIBLE_DEVICES");
@@ -5690,7 +5710,7 @@ static void ggml_vk_instance_init() {
 
     for (size_t i = 0; i < vk_instance.device_indices.size(); i++) {
         vk::PhysicalDevice vkdev = devices[vk_instance.device_indices[i]];
-        std::vector<vk::ExtensionProperties> extensionprops = vkdev.enumerateDeviceExtensionProperties();
+        std::vector<vk::ExtensionProperties> extensionprops = vkdev.enumerateDeviceExtensionProperties(nullptr, ggml_vk_default_dispatcher_instance);
 
         bool membudget_supported = false;
         for (const auto & ext : extensionprops) {
@@ -5704,12 +5724,20 @@ static void ggml_vk_instance_init() {
 
         ggml_vk_print_gpu_info(i);
     }
+    } catch (const std::exception& e) {
+        std::cerr << "ggml_vulkan: Exception during initialization: " << e.what() << std::endl;
+        vk_instance_initialized = false;
+    }
 }
 
 static void ggml_vk_init(ggml_backend_vk_context * ctx, size_t idx) {
     VK_LOG_DEBUG("ggml_vk_init(" << ctx->name << ", " << idx << ")");
     ggml_vk_instance_init();
-    GGML_ASSERT(idx < vk_instance.device_indices.size());
+    
+    if (!vk_instance_initialized || idx >= vk_instance.device_indices.size()) {
+        std::cerr << "ggml_vulkan: Cannot initialize context: Vulkan not initialized or device missing." << std::endl;
+        return;
+    }
 
     ctx->name = GGML_VK_NAME + std::to_string(idx);
 
@@ -6390,7 +6418,7 @@ static void ggml_vk_buffer_write_nc_async(ggml_backend_vk_context * ctx, vk_cont
     VkBufferCopy buf_copy{ 0, offset, copy_size };
 
     ggml_vk_sync_buffers(ctx, subctx);
-    vkCmdCopyBuffer(subctx->s->buffer, (VkBuffer)staging->buffer, (VkBuffer)dst->buffer, 1, &buf_copy);
+    ggml_vk_default_dispatcher_instance.vkCmdCopyBuffer(subctx->s->buffer, (VkBuffer)staging->buffer, (VkBuffer)dst->buffer, 1, &buf_copy);
 
     for (uint64_t i3 = 0; i3 < ne3; i3++) {
         for (uint64_t i2 = 0; i2 < ne2; i2++) {
@@ -6461,7 +6489,7 @@ static bool ggml_vk_buffer_write_2d_async(vk_context subctx, vk_buffer& dst, siz
         copy_size};
 
     ggml_vk_sync_buffers(nullptr, subctx);
-    vkCmdCopyBuffer(subctx->s->buffer, (VkBuffer)staging_buffer->buffer, (VkBuffer)dst->buffer, 1, &buf_copy);
+    ggml_vk_default_dispatcher_instance.vkCmdCopyBuffer(subctx->s->buffer, (VkBuffer)staging_buffer->buffer, (VkBuffer)dst->buffer, 1, &buf_copy);
 
     if (width == spitch) {
         deferred_memcpy((uint8_t *)staging_buffer->ptr, src, width * height, &subctx->in_memcpys);
@@ -6612,7 +6640,7 @@ static void ggml_vk_buffer_copy_async(vk_context& ctx, vk_buffer& dst, size_t ds
 
     VkBufferCopy bc{ src_offset, dst_offset, size };
 
-    vkCmdCopyBuffer(ctx->s->buffer, (VkBuffer)src->buffer, (VkBuffer)dst->buffer, 1, &bc);
+    ggml_vk_default_dispatcher_instance.vkCmdCopyBuffer(ctx->s->buffer, (VkBuffer)src->buffer, (VkBuffer)dst->buffer, 1, &bc);
 }
 
 static void ggml_vk_buffer_copy(vk_buffer& dst, size_t dst_offset, vk_buffer& src, size_t src_offset, size_t size) {
@@ -12976,6 +13004,10 @@ static void ggml_vk_cleanup(ggml_backend_vk_context * ctx) {
 
 static int ggml_vk_get_device_count() {
     ggml_vk_instance_init();
+    
+    if (!vk_instance_initialized) {
+        return 0;
+    }
 
     return vk_instance.device_indices.size();
 }
@@ -15352,7 +15384,11 @@ static bool ggml_vk_device_is_supported(const vk::PhysicalDevice & vkdev) {
     vk11_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;
     device_features2.pNext = &vk11_features;
 
-    vkGetPhysicalDeviceFeatures2(vkdev, &device_features2);
+    if (VULKAN_HPP_DEFAULT_DISPATCHER.vkGetPhysicalDeviceFeatures2) {
+        VULKAN_HPP_DEFAULT_DISPATCHER.vkGetPhysicalDeviceFeatures2(vkdev, &device_features2);
+    } else {
+        ggml_vk_default_dispatcher_instance.vkGetPhysicalDeviceFeatures(vkdev, &device_features2.features);
+    }
 
     return vk11_features.storageBuffer16BitAccess;
 }
