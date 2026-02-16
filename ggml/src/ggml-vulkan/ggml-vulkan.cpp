@@ -5413,7 +5413,12 @@ static void ggml_vk_print_gpu_info(size_t idx) {
     }
 #endif
 
-    vkGetPhysicalDeviceFeatures2(physical_device, &device_features2);
+    if (vkGetPhysicalDeviceFeatures2) {
+        vkGetPhysicalDeviceFeatures2(physical_device, &device_features2);
+    } else {
+        // Log or handle the absence of vkGetPhysicalDeviceFeatures2
+        // Use default or safe features
+    }
 
     fp16 = fp16 && vk12_features.shaderFloat16;
 
