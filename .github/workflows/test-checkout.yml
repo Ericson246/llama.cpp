@@ -1,0 +1,13 @@
+name: Test Checkout
+
+on:
+  push:
+    tags: [ 'test2-*' ]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - run: ls -la
