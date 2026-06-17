@@ -123,7 +123,11 @@ jobs:
       - name: Install Vulkan SDK
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq libvulkan-dev spirv-headers glslc
+          sudo apt-get install -y -qq spirv-headers
+          wget -qO- https://packages.lunarg.com/lunarg-signing-key-pub.asc | sudo tee /etc/apt/trusted.gpg.d/lunarg.asc
+          sudo wget -qO /etc/apt/sources.list.d/lunarg-vulkan-noble.list https://packages.lunarg.com/vulkan/lunarg-vulkan-noble.list
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq vulkan-sdk
 
       - name: Configure CMake
         run: >
@@ -134,7 +138,7 @@ jobs:
           -DANDROID_PLATFORM=android-24
           -DLLAMA_BUILD_APP=OFF
           -DCMAKE_FIND_ROOT_PATH_MODE_PACKAGE=BOTH
-          -DVulkan_INCLUDE_DIR=/usr/include
+          -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=BOTH
           -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_TOOLS=ON -DLLAMA_BUILD_SERVER=ON
           -DLLAMA_BUILD_TESTS=OFF
           -DBUILD_SHARED_LIBS=OFF
