@@ -28,7 +28,7 @@ jobs:
         run: cmake --build build --config Release --parallel
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: llama-server-windows-x64
           path: build/bin/Release/llama-server.exe
@@ -61,7 +61,7 @@ jobs:
         run: cmake --build build --config Release --parallel
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: llama-server-linux-x64
           path: build/bin/llama-server
@@ -85,7 +85,7 @@ jobs:
         run: cmake --build build --config Release --parallel
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: llama-server-macos-arm64
           path: build/bin/llama-server
@@ -97,7 +97,7 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Setup Java
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: 17
@@ -133,7 +133,7 @@ jobs:
         run: cmake --build build --config Release --parallel
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: llama-server-android-arm64
           path: build/bin/llama-server
