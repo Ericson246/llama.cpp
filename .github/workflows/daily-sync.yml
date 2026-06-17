@@ -1,0 +1,63 @@
+name: Daily Sync & Release
+
+on:
+  schedule:
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    outputs:
+      tag_name: ${{ steps.tag.outputs.name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup git user
+        run: |
+          git config user.name "daily-sync[bot]"
+          git config user.email "daily-sync[bot]@users.noreply.github.com"
+
+      - name: Add upstream and fetch
+        run: |
+          git remote add upstream https://github.com/ggml-org/llama.cpp.git
+          git fetch upstream master
+
+      - name: Sync master
+        run: |
+          git checkout master
+          git merge upstream/master
+          git push origin master
+
+      - name: Sync builds
+        run: |
+          git checkout builds
+          git merge master --no-commit --no-ff
+          for f in $(git diff --cached --name-only --diff-filter=A -- .github/workflows/); do
+            git rm --cached "$f"
+            rm -f "$f"
+          done
+          git commit --no-edit
+          git push origin builds
+
+      - name: Sync npu-check
+        continue-on-error: true
+        run: |
+          git checkout npu-check
+          git rebase master
+          git push origin npu-check --force-with-lease
+
+      - name: Create daily tag
+        id: tag
+        run: |
+          TAG_NAME="daily-$(date +'%Y-%m-%d')"
+          git checkout builds
+          git tag "$TAG_NAME"
+          git push origin "$TAG_NAME"
+          echo "name=$TAG_NAME" >> $GITHUB_OUTPUT

@@ -2,7 +2,9 @@ name: Release
 
 on:
   push:
-    tags: [ 'v*' ]
+    tags:
+      - 'v*'
+      - 'daily-*'
   workflow_dispatch:
 
 permissions:
@@ -16,7 +18,7 @@ jobs:
   windows:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Configure CMake
         run: >
@@ -40,7 +42,7 @@ jobs:
   linux:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Vulkan SDK
         run: |
@@ -73,7 +75,7 @@ jobs:
   macos:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Configure CMake
         run: >
@@ -97,7 +99,7 @@ jobs:
   android:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Setup Java
         uses: actions/setup-java@v4
