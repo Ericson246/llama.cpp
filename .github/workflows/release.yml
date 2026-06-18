@@ -119,15 +119,14 @@ jobs:
           distribution: temurin
           java-version: 17
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699
-        with:
-          log-accepted-android-sdk-licenses: false
+      - name: Setup Android SDK env
+        run: |
+          echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> $GITHUB_ENV
 
       - name: Install NDK
         run: |
-          sdkmanager "ndk;27.0.12077973"
-          echo "ANDROID_NDK=${ANDROID_SDK_ROOT}/ndk/27.0.12077973" >> $GITHUB_ENV
+          echo "y" | sudo $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "ndk;27.0.12077973" > /dev/null
+          echo "ANDROID_NDK=$ANDROID_HOME/ndk/27.0.12077973" >> $GITHUB_ENV
 
       - name: Install Vulkan SDK
         run: |
@@ -136,6 +135,14 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq vulkan-sdk
           echo "VULKAN_SDK=/usr" >> $GITHUB_ENV
+          # Copy vulkan.hpp to NDK sysroot so the NDK cross-compiler can find it
+          NDK_SYSROOT="$ANDROID_NDK/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
+          sudo cp /usr/include/vulkan/vulkan.hpp "$NDK_SYSROOT/usr/include/vulkan/"
+          sudo cp /usr/include/vulkan/vulkan_enums.hpp "$NDK_SYSROOT/usr/include/vulkan/" 2>/dev/null || true
+          sudo cp /usr/include/vulkan/vulkan_funcs.hpp "$NDK_SYSROOT/usr/include/vulkan/" 2>/dev/null || true
+          sudo cp /usr/include/vulkan/vulkan_handles.hpp "$NDK_SYSROOT/usr/include/vulkan/" 2>/dev/null || true
+          sudo cp /usr/include/vulkan/vulkan_structs.hpp "$NDK_SYSROOT/usr/include/vulkan/" 2>/dev/null || true
+          sudo cp /usr/include/vulkan/vulkan_to_string.hpp "$NDK_SYSROOT/usr/include/vulkan/" 2>/dev/null || true
 
       - name: Configure CMake
         run: >
