@@ -135,9 +135,9 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq vulkan-sdk
           echo "VULKAN_SDK=/usr" >> $GITHUB_ENV
-          # Copy all Vulkan C++ headers to NDK sysroot so the NDK cross-compiler can find them
+          # Override ALL NDK Vulkan headers with LunarG SDK (newer version) for version consistency
           NDK_SYSROOT="$ANDROID_NDK/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
-          sudo cp /usr/include/vulkan/vulkan*.hpp "$NDK_SYSROOT/usr/include/vulkan/" 2>/dev/null || true
+          sudo cp -r /usr/include/vulkan/* "$NDK_SYSROOT/usr/include/vulkan/"
 
       - name: Configure CMake
         run: >
