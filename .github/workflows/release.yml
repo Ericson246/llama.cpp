@@ -166,8 +166,62 @@ jobs:
           path: build/bin/llama-server
           if-no-files-found: error
 
+  windows-openvino:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install OpenVINO SDK
+        shell: pwsh
+        run: |
+          $version = "2026.0.0.20965.c6d6a13a886"
+          $url = "https://storage.openvinotoolkit.org/repositories/openvino/packages/2026.0/windows/openvino_toolkit_windows_${version}_x86_64.zip"
+          $zipPath = "$env:RUNNER_TEMP\openvino.zip"
+          curl.exe -L -o $zipPath $url
+          $extractDir = "$env:RUNNER_TEMP\openvino"
+          Expand-Archive -Path $zipPath -DestinationPath $extractDir
+          # Find setupvars.bat and use its location to set OpenVINO_DIR
+          $setupVars = Get-ChildItem -Path $extractDir -Recurse -Filter "setupvars.bat" | Select-Object -First 1
+          if ($setupVars) {
+            $ovRoot = $setupVars.DirectoryName
+            echo "OpenVINO_DIR=$ovRoot\runtime\cmake" | Out-File -FilePath $env:GITHUB_ENV -Append
+            echo "$ovRoot\runtime\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
+            $tbbDir = "$ovRoot\3rdparty\tbb\bin"
+            if (Test-Path $tbbDir) {
+              echo "$tbbDir" | Out-File -FilePath $env:GITHUB_PATH -Append
+            }
+          }
+
+      - name: Install OpenCL via vcpkg
+        shell: pwsh
+        run: |
+          git clone https://github.com/microsoft/vcpkg "$env:RUNNER_TEMP\vcpkg"
+          & "$env:RUNNER_TEMP\vcpkg\bootstrap-vcpkg.bat"
+          & "$env:RUNNER_TEMP\vcpkg\vcpkg" install opencl --triplet x64-windows
+
+      - name: Configure CMake
+        run: >
+          cmake -S . -B build
+          -DGGML_OPENVINO=ON
+          -DLLAMA_BUILD_APP=OFF
+          -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_TOOLS=ON -DLLAMA_BUILD_SERVER=ON
+          -DLLAMA_BUILD_TESTS=OFF
+          -DBUILD_SHARED_LIBS=OFF
+          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_TOOLCHAIN_FILE=${{ runner.temp }}/vcpkg/scripts/buildsystems/vcpkg.cmake
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: llama-server-windows-openvino-x64
+          path: build/bin/Release/llama-server.exe
+          if-no-files-found: error
+
   release:
-    needs: [windows, linux, macos, android]
+    needs: [windows, linux, macos, android, windows-openvino]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
 
