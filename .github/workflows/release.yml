@@ -15,7 +15,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  windows:
+  windows-vulkan-x64:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v6
@@ -49,7 +49,7 @@ jobs:
           path: build/bin/Release/llama-server.exe
           if-no-files-found: error
 
-  linux:
+  linux-vulkan-x64:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -83,7 +83,7 @@ jobs:
           path: build/bin/llama-server
           if-no-files-found: error
 
-  macos:
+  macos-metal-arm64:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v6
@@ -108,7 +108,7 @@ jobs:
           path: build/bin/llama-server
           if-no-files-found: error
 
-  android:
+  android-vulkan-arm64:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -166,7 +166,7 @@ jobs:
           path: build/bin/llama-server
           if-no-files-found: error
 
-  windows-openvino:
+  windows-openvino-x64:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v6
@@ -221,7 +221,7 @@ jobs:
           if-no-files-found: error
 
   release:
-    needs: [windows, linux, macos, android, windows-openvino]
+    needs: [windows-vulkan-x64, linux-vulkan-x64, macos-metal-arm64, android-vulkan-arm64, windows-openvino-x64]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
 
@@ -243,4 +243,7 @@ jobs:
             --title "llama-server $TAG" \
             --notes "See [CHANGELOG](CHANGELOG.md) for details." \
             --verify-tag
-          find artifacts -type f -exec gh release upload "$TAG" {} \;
+          find artifacts -mindepth 2 -type f | while read f; do
+            name=$(basename "$(dirname "$f")")
+            gh release upload "$TAG" "$f" --name "$name" --clobber
+          done
