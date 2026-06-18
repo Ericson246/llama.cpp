@@ -119,31 +119,34 @@ jobs:
           distribution: temurin
           java-version: 17
 
-      - name: Install Android NDK
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699
+        with:
+          log-accepted-android-sdk-licenses: false
+
+      - name: Install NDK
         run: |
-          echo "y" | sudo $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "ndk;27.0.12077973" > /dev/null
-          NDK_PATH=$(ls -d $ANDROID_HOME/ndk/* | head -1)
-          echo "NDK_PATH=$NDK_PATH" >> $GITHUB_ENV
+          sdkmanager "ndk;27.0.12077973"
+          echo "ANDROID_NDK=${ANDROID_SDK_ROOT}/ndk/27.0.12077973" >> $GITHUB_ENV
 
       - name: Install Vulkan SDK
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq libvulkan-dev spirv-headers
           wget -qO- https://packages.lunarg.com/lunarg-signing-key-pub.asc | sudo tee /etc/apt/trusted.gpg.d/lunarg.asc
           sudo wget -qO /etc/apt/sources.list.d/lunarg-vulkan-noble.list https://packages.lunarg.com/vulkan/lunarg-vulkan-noble.list
           sudo apt-get update -qq
           sudo apt-get install -y -qq vulkan-sdk
+          echo "VULKAN_SDK=/usr" >> $GITHUB_ENV
 
       - name: Configure CMake
         run: >
           cmake -S . -B build
           -DGGML_VULKAN=ON
-          -DCMAKE_TOOLCHAIN_FILE=${{ env.NDK_PATH }}/build/cmake/android.toolchain.cmake
+          -DGGML_BACKEND_DL=ON
+          -DCMAKE_TOOLCHAIN_FILE=${{ env.ANDROID_NDK }}/build/cmake/android.toolchain.cmake
           -DANDROID_ABI=arm64-v8a
-          -DANDROID_PLATFORM=android-24
+          -DANDROID_PLATFORM=android-28
           -DLLAMA_BUILD_APP=OFF
           -DVulkan_INCLUDE_DIR=/usr/include
-          -DCMAKE_FIND_ROOT_PATH_MODE_PACKAGE=BOTH
           -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_TOOLS=ON -DLLAMA_BUILD_SERVER=ON
           -DLLAMA_BUILD_TESTS=OFF
           -DBUILD_SHARED_LIBS=OFF

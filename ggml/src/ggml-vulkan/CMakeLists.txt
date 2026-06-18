@@ -6,11 +6,19 @@ if (POLICY CMP0147)
     cmake_policy(SET CMP0147 NEW)
 endif()
 
-find_package(Vulkan COMPONENTS glslc REQUIRED)
-
 if (DEFINED ENV{VULKAN_SDK})
     list(APPEND CMAKE_PREFIX_PATH "$ENV{VULKAN_SDK}")
 endif()
+
+if (CMAKE_CROSSCOMPILING)
+    set(_vk_save_root_mode ${CMAKE_FIND_ROOT_PATH_MODE_PACKAGE})
+    set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE "NEVER")
+    find_package(Vulkan COMPONENTS glslc REQUIRED)
+    set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ${_vk_save_root_mode})
+else()
+    find_package(Vulkan COMPONENTS glslc REQUIRED)
+endif()
+
 find_package(SPIRV-Headers CONFIG REQUIRED)
 
 if (CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
