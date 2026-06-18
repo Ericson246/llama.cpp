@@ -245,5 +245,13 @@ jobs:
             --verify-tag
           find artifacts -mindepth 2 -type f | while read f; do
             name=$(basename "$(dirname "$f")")
-            gh release upload "$TAG" "$f" --name "$name" --clobber
+            bn=$(basename "$f")
+            ext="${bn##*.}"
+            if [ "$ext" = "$bn" ]; then
+              mv "$f" "/tmp/$name"
+              gh release upload "$TAG" "/tmp/$name" --clobber
+            else
+              mv "$f" "/tmp/$name.$ext"
+              gh release upload "$TAG" "/tmp/$name.$ext" --clobber
+            fi
           done
