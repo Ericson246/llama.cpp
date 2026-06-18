@@ -258,7 +258,7 @@ endif()
 
 target_link_libraries(ggml PUBLIC ggml-base)
 
-if (CMAKE_SYSTEM_NAME MATCHES "Linux")
+if (CMAKE_SYSTEM_NAME MATCHES "Linux" OR CMAKE_SYSTEM_NAME MATCHES "Android")
     target_link_libraries(ggml PRIVATE dl)
 endif()
 
@@ -290,7 +290,8 @@ function(ggml_add_backend_library backend)
 
     # Set versioning properties for all backend libraries
     # Building a MODULE library with a version is not supported on macOS (https://gitlab.kitware.com/cmake/cmake/-/issues/20782)
-    if (NOT (APPLE AND GGML_BACKEND_DL))
+    # Also skip on Android since dlopen() expects unversioned .so names
+    if (NOT ((APPLE OR CMAKE_SYSTEM_NAME MATCHES "Android") AND GGML_BACKEND_DL))
         set_target_properties(${backend} PROPERTIES
             VERSION ${GGML_VERSION}
             SOVERSION ${GGML_VERSION_MAJOR}
