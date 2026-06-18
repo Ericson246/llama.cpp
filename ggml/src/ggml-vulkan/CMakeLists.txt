@@ -19,7 +19,14 @@ else()
     find_package(Vulkan COMPONENTS glslc REQUIRED)
 endif()
 
-find_package(SPIRV-Headers CONFIG REQUIRED)
+if (CMAKE_CROSSCOMPILING)
+    set(_vk_save_spv_root_mode ${CMAKE_FIND_ROOT_PATH_MODE_PACKAGE})
+    set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE "NEVER")
+    find_package(SPIRV-Headers CONFIG REQUIRED)
+    set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ${_vk_save_spv_root_mode})
+else()
+    find_package(SPIRV-Headers CONFIG REQUIRED)
+endif()
 
 if (CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
     # Parallel build object files
