@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: write
+  workflows: write
 
 jobs:
   sync:
@@ -14,10 +15,10 @@ jobs:
     outputs:
       tag_name: ${{ steps.tag.outputs.name }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.SYNC_PAT }}
 
       - name: Setup git user
         run: |
@@ -35,10 +36,24 @@ jobs:
           git merge upstream/master
           git push origin master
 
+      - name: Sync daily-sync.yml to master
+        run: |
+          git checkout master
+          git checkout builds -- .github/workflows/daily-sync.yml 2>/dev/null || true
+          git diff --quiet -- .github/workflows/daily-sync.yml || {
+            git add .github/workflows/daily-sync.yml
+            git commit -m "sync: update daily-sync.yml from builds"
+            git push origin master
+          }
+
       - name: Sync builds
         run: |
           git checkout builds
           git merge master --no-commit --no-ff
+          # Restore our custom workflows (upstream may have changed release.yml)
+          git checkout --ours -- .github/workflows/release.yml .github/workflows/daily-sync.yml 2>/dev/null || true
+          git add .github/workflows/release.yml .github/workflows/daily-sync.yml
+          # Remove any NEW workflow files from upstream
           for f in $(git diff --cached --name-only --diff-filter=A -- .github/workflows/); do
             git rm --cached "$f"
             rm -f "$f"
