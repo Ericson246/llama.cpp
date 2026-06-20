@@ -4,6 +4,12 @@ on:
   schedule:
     - cron: '0 2 * * *'
   workflow_dispatch:
+    inputs:
+      force:
+        description: 'Force recreate today tag (re-run release)'
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -51,7 +57,13 @@ jobs:
         id: tag
         run: |
           TAG_NAME="daily-$(date +'%Y-%m-%d')"
-          if git rev-parse "$TAG_NAME" >/dev/null 2>&1; then
+          if [ "${{ inputs.force }}" = "true" ]; then
+            echo "Force recreating tag $TAG_NAME"
+            git checkout master
+            git tag -f "$TAG_NAME"
+            git push origin -f "$TAG_NAME"
+            echo "name=$TAG_NAME" >> $GITHUB_OUTPUT
+          elif git rev-parse "$TAG_NAME" >/dev/null 2>&1; then
             echo "Tag $TAG_NAME already exists, skipping"
           else
             git checkout master
