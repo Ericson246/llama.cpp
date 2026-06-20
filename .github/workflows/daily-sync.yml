@@ -51,9 +51,9 @@ jobs:
           git merge master --no-commit --no-ff || true
           # Resolve modify/delete conflicts: upstream files deleted in builds
           git rm -f .github/workflows/build-cache.yml .github/workflows/build-openvino.yml .github/workflows/build-self-hosted.yml 2>/dev/null || true
-          # Keep our custom workflows (upstream may have changed release.yml)
-          git checkout --ours -- .github/workflows/release.yml .github/workflows/daily-sync.yml 2>/dev/null || true
-          git add .github/workflows/release.yml .github/workflows/daily-sync.yml
+          # Keep our custom workflows (upstream may have changed custom-release.yml)
+          git checkout --ours -- .github/workflows/custom-release.yml .github/workflows/daily-sync.yml 2>/dev/null || true
+          git add .github/workflows/custom-release.yml .github/workflows/daily-sync.yml
           # Resolve any remaining conflicts with ours
           if [ -n "$(git diff --name-only --diff-filter=U 2>/dev/null)" ]; then
             git checkout --ours -- $(git diff --name-only --diff-filter=U)
