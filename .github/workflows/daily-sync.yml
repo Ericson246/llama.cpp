@@ -38,7 +38,7 @@ jobs:
       - name: Sync master
         run: |
           git checkout master
-          git merge upstream/master --no-edit
+          git merge upstream/master --no-edit -Xours
           # Remove any upstream workflow files
           git rm -f .github/workflows/*.yml 2>/dev/null || true
           git checkout HEAD -- .github/workflows/daily-sync.yml .github/workflows/custom-release.yml 2>/dev/null || true
