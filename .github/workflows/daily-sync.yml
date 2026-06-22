@@ -2,7 +2,7 @@ name: Daily Sync & Release
 
 on:
   schedule:
-    - cron: '0 2 * * *'
+    - cron: '0 22 * * *'
   workflow_dispatch:
     inputs:
       force:
@@ -38,7 +38,7 @@ jobs:
       - name: Sync master
         run: |
           git checkout master
-          git merge upstream/master --no-edit -Xours
+          git merge upstream/master --no-commit --no-ff || true
           # Remove any upstream workflow files
           git rm -f .github/workflows/*.yml 2>/dev/null || true
           git checkout HEAD -- .github/workflows/daily-sync.yml .github/workflows/custom-release.yml 2>/dev/null || true
