@@ -1,0 +1,376 @@
+name: Custom Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+      - 'daily-*'
+      - 'manual-*'
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Custom tag name (empty = auto: manual-YYYY-MM-DD-HHMM)'
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  get-tag:
+    runs-on: ubuntu-latest
+    outputs:
+      name: ${{ steps.tag.outputs.name }}
+    steps:
+      - id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ inputs.tag_name }}"
+            if [ -z "$TAG" ]; then
+              TAG="manual-$(date +'%Y-%m-%d-%H%M')"
+            fi
+          else
+            TAG="${{ github.ref_name }}"
+          fi
+          echo "name=$TAG" >> $GITHUB_OUTPUT
+
+  windows-cpu-x64:
+    needs: [get-tag]
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Configure CMake
+        run: >
+          cmake -S . -B build
+          -DGGML_NATIVE=OFF
+          -DGGML_BACKEND_DL=ON
+          -DGGML_CPU_ALL_VARIANTS=ON
+          -DLLAMA_BUILD_BORINGSSL=ON
+          -DLLAMA_BUILD_APP=OFF
+          -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_TOOLS=ON -DLLAMA_BUILD_SERVER=ON
+          -DLLAMA_BUILD_TESTS=OFF
+          -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $tag = "${{ needs.get-tag.outputs.name }}"
+          # Copy OpenMP redistributable DLL for CPU performance
+          $omp = Get-ChildItem "C:\Program Files\Microsoft Visual Studio\*\VC\Redist\MSVC\*\debug_nonredist\x64\Microsoft.VC*.OpenMP.LLVM\libomp*.dll" | Select-Object -First 1
+          if ($omp) { Copy-Item $omp.FullName .\build\bin\Release\ }
+          7z a -snl "llama-${tag}-bin-win-cpu-x64.zip" .\build\bin\Release\*
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: llama-bin-win-cpu-x64.zip
+          path: llama-${{ needs.get-tag.outputs.name }}-bin-win-cpu-x64.zip
+          if-no-files-found: error
+
+  windows-vulkan-x64:
+    needs: [get-tag]
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Vulkan SDK
+        shell: pwsh
+        run: |
+          $vulkanVersion = "1.4.313.2"
+          curl.exe -o "$env:RUNNER_TEMP\VulkanSDK-Installer.exe" -L "https://sdk.lunarg.com/sdk/download/${vulkanVersion}/windows/vulkansdk-windows-X64-${vulkanVersion}.exe"
+          & "$env:RUNNER_TEMP\VulkanSDK-Installer.exe" --accept-licenses --default-answer --confirm-command install
+          Add-Content $env:GITHUB_ENV "VULKAN_SDK=C:\VulkanSDK\${vulkanVersion}"
+          Add-Content $env:GITHUB_PATH "C:\VulkanSDK\${vulkanVersion}\bin"
+
+      - name: Configure CMake
+        run: >
+          cmake -S . -B build
+          -DGGML_VULKAN=ON
+          -DGGML_CPU=OFF
+          -DGGML_NATIVE=OFF
+          -DGGML_BACKEND_DL=ON
+          -DLLAMA_BUILD_BORINGSSL=ON
+          -DLLAMA_BUILD_APP=OFF
+          -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_TOOLS=ON -DLLAMA_BUILD_SERVER=ON
+          -DLLAMA_BUILD_TESTS=OFF
+          -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $tag = "${{ needs.get-tag.outputs.name }}"
+          7z a -snl "llama-${tag}-bin-win-vulkan-x64.zip" .\build\bin\Release\*
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: llama-bin-win-vulkan-x64.zip
+          path: llama-${{ needs.get-tag.outputs.name }}-bin-win-vulkan-x64.zip
+          if-no-files-found: error
+
+  windows-openvino-x64:
+    needs: [get-tag]
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install OpenVINO SDK
+        shell: pwsh
+        run: |
+          $version = "2026.0.0.20965.c6d6a13a886"
+          $url = "https://storage.openvinotoolkit.org/repositories/openvino/packages/2026.0/windows/openvino_toolkit_windows_${version}_x86_64.zip"
+          $zipPath = "$env:RUNNER_TEMP\openvino.zip"
+          curl.exe -L -o $zipPath $url
+          $extractDir = "$env:RUNNER_TEMP\openvino"
+          Expand-Archive -Path $zipPath -DestinationPath $extractDir
+          $setupVars = Get-ChildItem -Path $extractDir -Recurse -Filter "setupvars.bat" | Select-Object -First 1
+          if ($setupVars) {
+            $ovRoot = $setupVars.DirectoryName
+            echo "OpenVINO_DIR=$ovRoot\runtime\cmake" | Out-File -FilePath $env:GITHUB_ENV -Append
+            echo "$ovRoot\runtime\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
+            $tbbDir = "$ovRoot\3rdparty\tbb\bin"
+            if (Test-Path $tbbDir) {
+              echo "$tbbDir" | Out-File -FilePath $env:GITHUB_PATH -Append
+            }
+          }
+
+      - name: Install OpenCL via vcpkg
+        shell: pwsh
+        run: |
+          git clone https://github.com/microsoft/vcpkg "$env:RUNNER_TEMP\vcpkg"
+          & "$env:RUNNER_TEMP\vcpkg\bootstrap-vcpkg.bat"
+          & "$env:RUNNER_TEMP\vcpkg\vcpkg" install opencl --triplet x64-windows
+
+      - name: Configure CMake
+        run: >
+          cmake -S . -B build
+          -DGGML_OPENVINO=ON
+          -DGGML_CPU=OFF
+          -DGGML_NATIVE=OFF
+          -DGGML_BACKEND_DL=ON
+          -DLLAMA_BUILD_APP=OFF
+          -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_TOOLS=ON -DLLAMA_BUILD_SERVER=ON
+          -DLLAMA_BUILD_TESTS=OFF
+          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_TOOLCHAIN_FILE=${{ runner.temp }}/vcpkg/scripts/buildsystems/vcpkg.cmake
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $tag = "${{ needs.get-tag.outputs.name }}"
+          7z a -snl "llama-${tag}-bin-win-openvino-2026.2-x64.zip" .\build\bin\Release\*
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: llama-bin-win-openvino-x64.zip
+          path: llama-${{ needs.get-tag.outputs.name }}-bin-win-openvino-2026.2-x64.zip
+          if-no-files-found: error
+
+  linux-vulkan-x64:
+    needs: [get-tag]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Vulkan SDK
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libvulkan-dev
+          wget -qO- https://packages.lunarg.com/lunarg-signing-key-pub.asc | sudo tee /etc/apt/trusted.gpg.d/lunarg.asc
+          sudo wget -qO /etc/apt/sources.list.d/lunarg-vulkan-noble.list https://packages.lunarg.com/vulkan/lunarg-vulkan-noble.list
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq vulkan-sdk
+
+      - name: Configure CMake
+        run: >
+          cmake -S . -B build
+          -DGGML_VULKAN=ON
+          -DGGML_NATIVE=OFF
+          -DGGML_BACKEND_DL=ON
+          -DGGML_CPU_ALL_VARIANTS=ON
+          -DCMAKE_INSTALL_RPATH='$ORIGIN'
+          -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON
+          -DLLAMA_BUILD_BORINGSSL=ON
+          -DLLAMA_BUILD_APP=OFF
+          -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_TOOLS=ON -DLLAMA_BUILD_SERVER=ON
+          -DLLAMA_BUILD_TESTS=OFF
+          -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --config Release --parallel $(nproc)
+
+      - name: Package
+        run: |
+          cp LICENSE ./build/bin/
+          tar -czvf "llama-${{ needs.get-tag.outputs.name }}-bin-ubuntu-vulkan-x64.tar.gz" \
+            --transform "s,^\.,llama-${{ needs.get-tag.outputs.name }}," \
+            -C ./build/bin .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: llama-bin-ubuntu-vulkan-x64.tar.gz
+          path: llama-${{ needs.get-tag.outputs.name }}-bin-ubuntu-vulkan-x64.tar.gz
+          if-no-files-found: error
+
+  macos-metal-arm64:
+    needs: [get-tag]
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Configure CMake
+        run: >
+          cmake -S . -B build
+          -DGGML_METAL=ON
+          -DGGML_METAL_EMBED_LIBRARY=ON
+          -DGGML_METAL_USE_BF16=ON
+          -DCMAKE_INSTALL_RPATH='@loader_path'
+          -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON
+          -DLLAMA_BUILD_BORINGSSL=ON
+          -DLLAMA_BUILD_APP=OFF
+          -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_TOOLS=ON -DLLAMA_BUILD_SERVER=ON
+          -DLLAMA_BUILD_TESTS=OFF
+          -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --config Release --parallel $(sysctl -n hw.logicalcpu)
+
+      - name: Package
+        run: |
+          cp LICENSE ./build/bin/
+          tar -czvf "llama-${{ needs.get-tag.outputs.name }}-bin-macos-arm64.tar.gz" \
+            -s ",^\.,llama-${{ needs.get-tag.outputs.name }}," \
+            -C ./build/bin .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: llama-bin-macos-arm64.tar.gz
+          path: llama-${{ needs.get-tag.outputs.name }}-bin-macos-arm64.tar.gz
+          if-no-files-found: error
+
+  android-vulkan-arm64:
+    needs: [get-tag]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Setup Android SDK env
+        run: |
+          echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> $GITHUB_ENV
+
+      - name: Install NDK
+        run: |
+          echo "y" | sudo $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "ndk;27.0.12077973" > /dev/null
+          echo "ANDROID_NDK=$ANDROID_HOME/ndk/27.0.12077973" >> $GITHUB_ENV
+
+      - name: Install Vulkan SDK
+        run: |
+          wget -qO- https://packages.lunarg.com/lunarg-signing-key-pub.asc | sudo tee /etc/apt/trusted.gpg.d/lunarg.asc
+          sudo wget -qO /etc/apt/sources.list.d/lunarg-vulkan-noble.list https://packages.lunarg.com/vulkan/lunarg-vulkan-noble.list
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq vulkan-sdk
+          echo "VULKAN_SDK=/usr" >> $GITHUB_ENV
+          # Override ALL NDK Vulkan headers with LunarG SDK (newer version) for version consistency
+          NDK_SYSROOT="$ANDROID_NDK/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
+          sudo cp -r /usr/include/vulkan/* "$NDK_SYSROOT/usr/include/vulkan/"
+          sudo cp -r /usr/include/vk_video "$NDK_SYSROOT/usr/include/" 2>/dev/null || true
+          sudo cp -r /usr/include/spirv "$NDK_SYSROOT/usr/include/" 2>/dev/null || true
+
+      - name: Configure CMake
+        run: >
+          cmake -S . -B build
+          -DGGML_VULKAN=ON
+          -DGGML_NATIVE=OFF
+          -DGGML_BACKEND_DL=ON
+          -DGGML_CPU_ALL_VARIANTS=ON
+          -DCMAKE_TOOLCHAIN_FILE=${{ env.ANDROID_NDK }}/build/cmake/android.toolchain.cmake
+          -DANDROID_ABI=arm64-v8a
+          -DANDROID_PLATFORM=android-28
+          -DCMAKE_INSTALL_RPATH='$ORIGIN'
+          -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON
+          -DVulkan_INCLUDE_DIR=/usr/include
+          -DLLAMA_BUILD_BORINGSSL=ON
+          -DLLAMA_BUILD_APP=OFF
+          -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_TOOLS=ON -DLLAMA_BUILD_SERVER=ON
+          -DLLAMA_BUILD_TESTS=OFF
+          -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --config Release --parallel $(nproc)
+
+      - name: Package
+        run: |
+          cp LICENSE ./build/bin/
+          tar -czvf "llama-${{ needs.get-tag.outputs.name }}-bin-android-arm64.tar.gz" \
+            --transform "s,^\.,llama-${{ needs.get-tag.outputs.name }}," \
+            -C ./build/bin .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: llama-bin-android-arm64.tar.gz
+          path: llama-${{ needs.get-tag.outputs.name }}-bin-android-arm64.tar.gz
+          if-no-files-found: error
+
+  release:
+    needs: [get-tag, windows-cpu-x64, windows-vulkan-x64, windows-openvino-x64,
+            linux-vulkan-x64, macos-metal-arm64, android-vulkan-arm64]
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Create tag for manual dispatch
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          TAG="${{ needs.get-tag.outputs.name }}"
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists, skipping tag creation"
+          else
+            git tag "$TAG"
+            git push origin "$TAG"
+            sleep 5
+          fi
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v7
+        with:
+          path: artifacts
+
+      - name: Create GitHub Release and upload
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ needs.get-tag.outputs.name }}"
+          gh release create "$TAG" \
+            --title "llama-server $TAG" \
+            --notes "See [CHANGELOG](CHANGELOG.md) for details." \
+            --verify-tag 2>/dev/null || true
+          find artifacts -type f \( -name "*.zip" -o -name "*.tar.gz" \) | while read f; do
+            echo "Uploading: $f"
+            gh release upload "$TAG" "$f" --clobber
+          done

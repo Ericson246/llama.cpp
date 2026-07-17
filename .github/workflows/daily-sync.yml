@@ -1,0 +1,73 @@
+name: Daily Sync & Release
+
+on:
+  schedule:
+    - cron: '0 22 * * *'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Force recreate today tag (re-run release)'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    outputs:
+      tag_name: ${{ steps.tag.outputs.name }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.SYNC_PAT }}
+
+      - name: Setup git user
+        run: |
+          git config user.name "daily-sync[bot]"
+          git config user.email "daily-sync[bot]@users.noreply.github.com"
+
+      - name: Add upstream and fetch
+        run: |
+          git remote add upstream https://github.com/ggml-org/llama.cpp.git
+          git fetch upstream master
+
+      - name: Sync master
+        run: |
+          git checkout master
+          git merge upstream/master --no-commit --no-ff || true
+          # Remove any upstream workflow files
+          git rm -f .github/workflows/*.yml 2>/dev/null || true
+          git checkout HEAD -- .github/workflows/daily-sync.yml .github/workflows/custom-release.yml 2>/dev/null || true
+          git add -A
+          git commit --no-edit || true
+          git push origin master
+
+      - name: Sync npu-check
+        continue-on-error: true
+        run: |
+          git checkout npu-check
+          git rebase -Xours master || git rebase --abort
+          git push origin npu-check --force-with-lease
+
+      - name: Create daily tag
+        id: tag
+        run: |
+          TAG_NAME="daily-$(date +'%Y-%m-%d')"
+          if [ "${{ inputs.force }}" = "true" ]; then
+            echo "Force recreating tag $TAG_NAME"
+            git checkout master
+            git tag -f "$TAG_NAME"
+            git push origin -f "$TAG_NAME"
+            echo "name=$TAG_NAME" >> $GITHUB_OUTPUT
+          elif git rev-parse "$TAG_NAME" >/dev/null 2>&1; then
+            echo "Tag $TAG_NAME already exists, skipping"
+          else
+            git checkout master
+            git tag "$TAG_NAME"
+            git push origin "$TAG_NAME"
+            echo "name=$TAG_NAME" >> $GITHUB_OUTPUT
+          fi
