@@ -298,6 +298,11 @@ jobs:
           sudo cp -r /usr/include/vulkan/* "$NDK_SYSROOT/usr/include/vulkan/"
           sudo cp -r /usr/include/vk_video "$NDK_SYSROOT/usr/include/" 2>/dev/null || true
           sudo cp -r /usr/include/spirv "$NDK_SYSROOT/usr/include/" 2>/dev/null || true
+          # Find SPIRV-Headers CMake config for cross-compilation (needed when NDK hides host paths)
+          SPIRV_DIR=$(find /usr/lib /usr/local /usr/share -name "SPIRV-HeadersConfig.cmake" -type f 2>/dev/null | head -1 | xargs -I{} dirname {} 2>/dev/null || echo "")
+          if [ -n "$SPIRV_DIR" ]; then
+            echo "SPIRV-Headers_DIR=$SPIRV_DIR" >> $GITHUB_ENV
+          fi
 
       - name: Configure CMake
         run: >
@@ -312,6 +317,7 @@ jobs:
           -DCMAKE_INSTALL_RPATH='$ORIGIN'
           -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON
           -DVulkan_INCLUDE_DIR=/usr/include
+          -DSPIRV-Headers_DIR=${{ env.SPIRV-Headers_DIR }}
           -DLLAMA_BUILD_BORINGSSL=ON
           -DLLAMA_BUILD_APP=OFF
           -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_TOOLS=ON -DLLAMA_BUILD_SERVER=ON
