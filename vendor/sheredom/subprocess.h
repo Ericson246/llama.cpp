@@ -1207,15 +1207,21 @@ cleanup:
   if (process_cwd) {
 #if defined(__APPLE__) && MAC_OS_X_VERSION_MIN_REQUIRED >= 260000
     posix_error = posix_spawn_file_actions_addchdir(&actions, process_cwd);
-#else
-#if defined(__APPLE__) && defined(__clang__)
+#elif defined(__APPLE__)
+#if defined(__clang__)
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
 #endif
     posix_error = posix_spawn_file_actions_addchdir_np(&actions, process_cwd);
-#if defined(__APPLE__) && defined(__clang__)
+#if defined(__clang__)
 #pragma clang diagnostic pop
 #endif
+#elif !defined(__ANDROID__)
+    posix_error = posix_spawn_file_actions_addchdir_np(&actions, process_cwd);
+#else
+    // Android: posix_spawn_file_actions_addchdir_np is not available in bionic libc
+    // The child process will inherit the parent's current working directory
+    posix_error = 0;
 #endif
     if (0 != posix_error) {
       saved_errno = posix_error;
