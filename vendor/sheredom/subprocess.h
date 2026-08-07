@@ -1234,15 +1234,8 @@ cleanup:
   if (process_cwd) {
 #if defined(__NetBSD__) || (defined(__APPLE__) && MAC_OS_X_VERSION_MIN_REQUIRED >= 260000)
     posix_error = posix_spawn_file_actions_addchdir(&actions, process_cwd);
-<<<<<<< HEAD
 #elif defined(__APPLE__)
 #if defined(__clang__)
-=======
-#elif !SUBPROCESS_HAVE_CWD
-    posix_error = ENOSYS;
-#else
-#if defined(__APPLE__) && defined(__clang__)
->>>>>>> upstream/master
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
 #endif

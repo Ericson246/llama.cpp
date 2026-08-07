@@ -39,6 +39,11 @@ jobs:
         run: |
           git checkout master
           git merge upstream/master --no-commit --no-ff || true
+          if git ls-files -u | grep -q .; then
+            echo "Merge conflict, aborting to avoid committing conflict markers"
+            git diff --name-only --diff-filter=U
+            exit 1
+          fi
           # Remove any upstream workflow files
           git rm -f .github/workflows/*.yml 2>/dev/null || true
           git checkout HEAD -- .github/workflows/daily-sync.yml .github/workflows/custom-release.yml 2>/dev/null || true
