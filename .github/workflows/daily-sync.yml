@@ -39,14 +39,23 @@ jobs:
         run: |
           git checkout master
           git merge upstream/master --no-commit --no-ff || true
+          # Resolve intentional conflict: remove upstream workflows, keep only fork-specific
+          git rm -f .github/workflows/*.yml 2>/dev/null || true
+          git checkout HEAD -- .github/workflows/daily-sync.yml .github/workflows/custom-release.yml 2>/dev/null || true
+          # Guard: abort if merged upstream code calls subprocess_* functions missing in the fork header
+          git grep -oh "subprocess_[a-z_]*(" -- 'tools/*.cpp' 'common/subproc*.cpp' 'tests/test-jinja.cpp' ':!vendor' | sort -u > "/tmp/calls.txt"
+          git grep -oh "subprocess_[a-z_]*(" -- 'vendor/sheredom/subprocess.h' | sort -u > "/tmp/decl.txt"
+          if comm -23 "/tmp/calls.txt" "/tmp/decl.txt" | grep -v subprocess_handle | grep -q .; then
+            echo "MISSING subprocess API provided by merged upstream code:"
+            comm -23 "/tmp/calls.txt" "/tmp/decl.txt" | grep -v subprocess_handle
+            exit 1
+          fi
+          # Guard: abort on any real remaining code conflict
           if git ls-files -u | grep -q .; then
             echo "Merge conflict, aborting to avoid committing conflict markers"
             git diff --name-only --diff-filter=U
             exit 1
           fi
-          # Remove any upstream workflow files
-          git rm -f .github/workflows/*.yml 2>/dev/null || true
-          git checkout HEAD -- .github/workflows/daily-sync.yml .github/workflows/custom-release.yml 2>/dev/null || true
           git add -A
           git commit --no-edit || true
           git push origin master
