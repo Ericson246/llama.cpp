@@ -128,8 +128,9 @@ jobs:
       - name: Install OpenVINO SDK
         shell: pwsh
         run: |
-          $version = "2026.0.0.20965.c6d6a13a886"
-          $url = "https://storage.openvinotoolkit.org/repositories/openvino/packages/2026.0/windows/openvino_toolkit_windows_${version}_x86_64.zip"
+          $versionMajor = "2026.2.1"
+          $versionFull = "2026.2.1.21919.ede283a88e3"
+          $url = "https://storage.openvinotoolkit.org/repositories/openvino/packages/${versionMajor}/windows/openvino_toolkit_windows_${versionFull}_x86_64.zip"
           $zipPath = "$env:RUNNER_TEMP\openvino.zip"
           curl.exe -L -o $zipPath $url
           $extractDir = "$env:RUNNER_TEMP\openvino"
@@ -172,13 +173,13 @@ jobs:
         shell: pwsh
         run: |
           $tag = "${{ needs.get-tag.outputs.name }}"
-          7z a -snl "llama-${tag}-bin-win-openvino-2026.2-x64.zip" .\build\bin\Release\*
+          7z a -snl "llama-${tag}-bin-win-openvino-2026.2.1-x64.zip" .\build\bin\Release\*
 
       - name: Upload artifact
         uses: actions/upload-artifact@v6
         with:
           name: llama-bin-win-openvino-x64.zip
-          path: llama-${{ needs.get-tag.outputs.name }}-bin-win-openvino-2026.2-x64.zip
+          path: llama-${{ needs.get-tag.outputs.name }}-bin-win-openvino-2026.2.1-x64.zip
           if-no-files-found: error
 
   linux-vulkan-x64:
